@@ -316,6 +316,9 @@
         <meta-data android:name="com.google.android.gms.car.application" android:resource="@xml/automotive_app_desc" />
 
         <meta-data android:name="com.google.android.gms.vision.DEPENDENCIES" android:value="face"  />
+        <meta-data
+            android:name="io.fabric.ApiKey"
+            android:value="b8fc853faef9c8703c2400294ef964fe1e47abdb" />
     </application>
 
 </manifest>

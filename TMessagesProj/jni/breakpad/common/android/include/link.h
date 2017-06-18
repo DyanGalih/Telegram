@@ -42,7 +42,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
-
+/*#if __ANDROID_API__ < 21
 struct r_debug {
   int              r_version;
   struct link_map* r_map;
@@ -61,6 +61,7 @@ struct link_map {
   struct link_map* l_next;
   struct link_map* l_prev;
 };
+#endif*/
 
 #ifdef __cplusplus
 }  // extern "C"
