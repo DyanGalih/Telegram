@@ -27,6 +27,8 @@ import android.os.PowerManager;
 import android.util.Base64;
 
 import com.crashlytics.android.Crashlytics;
+import com.gamatechno.gtfwm.Config;
+import com.gamatechno.gtfwm.Gtfw;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GooglePlayServicesUtil;
 
@@ -39,7 +41,7 @@ import org.telegram.ui.Components.ForegroundDetector;
 import java.io.File;
 import java.io.RandomAccessFile;
 
-public class ApplicationLoader extends Application {
+public class ApplicationLoader extends Gtfw {
 
     @SuppressLint("StaticFieldLeak")
     public static volatile Context applicationContext;
@@ -198,7 +200,23 @@ public class ApplicationLoader extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        gtfw = this;
+
+
+        if (BuildConfig.DEBUG) {
+            Gtfw.getInstance().setDebug(true);
+        } else {
+            Gtfw.getInstance().setDebug(false);
+        }
+
         Fabric.with(this, new Crashlytics());
+
+        this.init();
+
+        //Config.getInstance(this).setLoginClass(LoginActivity.class);
+        Config.getInstance(getApplicationContext()).setConfig("RESULT_KEY", "gtfwResult");
+        Config.getInstance(getApplicationContext()).setConfig("SESSION_COOKIE", "sf");
+        Config.getInstance(getApplicationContext()).setConfig("NEW_HASH", false);
 
         applicationContext = getApplicationContext();
         NativeLoader.initNativeLibs(ApplicationLoader.applicationContext);
