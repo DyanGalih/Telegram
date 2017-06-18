@@ -3,6 +3,7 @@
 
 
 <resources>
+    <string name="app_name">Chatty</string>
     <string name="AppName">Telegram</string>
     <string name="AppNameBeta">Telegram Beta</string>
     <string name="LanguageName">English</string>

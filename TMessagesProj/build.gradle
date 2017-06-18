@@ -33,6 +33,7 @@ configurations {
 }
 
 dependencies {
+    compile 'com.android.support:multidex:1.0.1'
     compile 'com.google.android.gms:play-services-gcm:10.2.0'
     compile 'com.google.android.gms:play-services-maps:10.2.0'
     compile 'com.google.android.gms:play-services-vision:10.2.0'
@@ -47,7 +48,6 @@ dependencies {
     compile('com.crashlytics.sdk.android:crashlytics:2.6.8@aar') {
         transitive = true;
     }
-    compile project(path: ':gtfwm')
     compile project(path: ':gtfwm')
 }
 
@@ -215,6 +215,7 @@ android {
         minSdkVersion 14
         targetSdkVersion 25
         versionName "3.18.0"
+        multiDexEnabled true
 
         externalNativeBuild {
             ndkBuild {

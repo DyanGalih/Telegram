@@ -20,6 +20,8 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Handler;
@@ -29,10 +31,12 @@ import android.util.Base64;
 import com.crashlytics.android.Crashlytics;
 import com.gamatechno.gtfwm.Config;
 import com.gamatechno.gtfwm.Gtfw;
+import com.gamatechno.gtfwm.database.RealmDb;
+import com.gamatechno.gtfwm.log.SysLog;
+import com.gamatechno.gtfwm.network.NukeSSLCerts;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GooglePlayServicesUtil;
 
-import io.fabric.sdk.android.Fabric;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.SerializedData;
 import org.telegram.tgnet.TLRPC;
@@ -40,193 +44,206 @@ import org.telegram.ui.Components.ForegroundDetector;
 
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+import io.fabric.sdk.android.Fabric;
 
 public class ApplicationLoader extends Gtfw {
 
-    @SuppressLint("StaticFieldLeak")
-    public static volatile Context applicationContext;
-    public static volatile Handler applicationHandler;
-    private static volatile boolean applicationInited = false;
+   @SuppressLint("StaticFieldLeak")
+   public static volatile Context applicationContext;
+   public static volatile Handler applicationHandler;
+   private static volatile boolean applicationInited = false;
 
-    public static volatile boolean isScreenOn = false;
-    public static volatile boolean mainInterfacePaused = true;
-    public static volatile boolean mainInterfacePausedStageQueue = true;
-    public static volatile long mainInterfacePausedStageQueueTime;
+   public static volatile boolean isScreenOn = false;
+   public static volatile boolean mainInterfacePaused = true;
+   public static volatile boolean mainInterfacePausedStageQueue = true;
+   public static volatile long mainInterfacePausedStageQueueTime;
 
-    private static void convertConfig() {
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("dataconfig", Context.MODE_PRIVATE);
-        if (preferences.contains("currentDatacenterId")) {
-            SerializedData buffer = new SerializedData(32 * 1024);
-            buffer.writeInt32(2);
-            buffer.writeBool(preferences.getInt("datacenterSetId", 0) != 0);
-            buffer.writeBool(true);
-            buffer.writeInt32(preferences.getInt("currentDatacenterId", 0));
-            buffer.writeInt32(preferences.getInt("timeDifference", 0));
-            buffer.writeInt32(preferences.getInt("lastDcUpdateTime", 0));
-            buffer.writeInt64(preferences.getLong("pushSessionId", 0));
-            buffer.writeBool(false);
-            buffer.writeInt32(0);
-            try {
-                String datacentersString = preferences.getString("datacenters", null);
-                if (datacentersString != null) {
-                    byte[] datacentersBytes = Base64.decode(datacentersString, Base64.DEFAULT);
-                    if (datacentersBytes != null) {
-                        SerializedData data = new SerializedData(datacentersBytes);
-                        buffer.writeInt32(data.readInt32(false));
-                        buffer.writeBytes(datacentersBytes, 4, datacentersBytes.length - 4);
-                        data.cleanup();
-                    }
-                }
-            } catch (Exception e) {
-                FileLog.e(e);
+   private boolean https = false;
+   private static final String versionNumber = "1.1.0";
+   private static final String versionCode = "Zum zum - pulau";
+   private boolean debug = false;
+   private PackageInfo info;
+   private int appVersionCode;
+   private String appName;
+   private String key=null;
+
+   private static void convertConfig() {
+      SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("dataconfig", Context.MODE_PRIVATE);
+      if (preferences.contains("currentDatacenterId")) {
+         SerializedData buffer = new SerializedData(32 * 1024);
+         buffer.writeInt32(2);
+         buffer.writeBool(preferences.getInt("datacenterSetId", 0) != 0);
+         buffer.writeBool(true);
+         buffer.writeInt32(preferences.getInt("currentDatacenterId", 0));
+         buffer.writeInt32(preferences.getInt("timeDifference", 0));
+         buffer.writeInt32(preferences.getInt("lastDcUpdateTime", 0));
+         buffer.writeInt64(preferences.getLong("pushSessionId", 0));
+         buffer.writeBool(false);
+         buffer.writeInt32(0);
+         try {
+            String datacentersString = preferences.getString("datacenters", null);
+            if (datacentersString != null) {
+               byte[] datacentersBytes = Base64.decode(datacentersString, Base64.DEFAULT);
+               if (datacentersBytes != null) {
+                  SerializedData data = new SerializedData(datacentersBytes);
+                  buffer.writeInt32(data.readInt32(false));
+                  buffer.writeBytes(datacentersBytes, 4, datacentersBytes.length - 4);
+                  data.cleanup();
+               }
             }
+         } catch (Exception e) {
+            FileLog.e(e);
+         }
 
-            try {
-                File file = new File(getFilesDirFixed(), "tgnet.dat");
-                RandomAccessFile fileOutputStream = new RandomAccessFile(file, "rws");
-                byte[] bytes = buffer.toByteArray();
-                fileOutputStream.writeInt(Integer.reverseBytes(bytes.length));
-                fileOutputStream.write(bytes);
-                fileOutputStream.close();
-            } catch (Exception e) {
-                FileLog.e(e);
-            }
-            buffer.cleanup();
-            preferences.edit().clear().commit();
-        }
-    }
+         try {
+            File file = new File(getFilesDirFixed(), "tgnet.dat");
+            RandomAccessFile fileOutputStream = new RandomAccessFile(file, "rws");
+            byte[] bytes = buffer.toByteArray();
+            fileOutputStream.writeInt(Integer.reverseBytes(bytes.length));
+            fileOutputStream.write(bytes);
+            fileOutputStream.close();
+         } catch (Exception e) {
+            FileLog.e(e);
+         }
+         buffer.cleanup();
+         preferences.edit().clear().commit();
+      }
+   }
 
-    public static File getFilesDirFixed() {
-        for (int a = 0; a < 10; a++) {
-            File path = ApplicationLoader.applicationContext.getFilesDir();
-            if (path != null) {
-                return path;
-            }
-        }
-        try {
-            ApplicationInfo info = applicationContext.getApplicationInfo();
-            File path = new File(info.dataDir, "files");
-            path.mkdirs();
+   public static File getFilesDirFixed() {
+      for (int a = 0; a < 10; a++) {
+         File path = ApplicationLoader.applicationContext.getFilesDir();
+         if (path != null) {
             return path;
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-        return new File("/data/data/org.telegram.messenger/files");
-    }
+         }
+      }
+      try {
+         ApplicationInfo info = applicationContext.getApplicationInfo();
+         File path = new File(info.dataDir, "files");
+         path.mkdirs();
+         return path;
+      } catch (Exception e) {
+         FileLog.e(e);
+      }
+      return new File("/data/data/org.telegram.messenger/files");
+   }
 
-    public static void postInitApplication() {
-        if (applicationInited) {
-            return;
-        }
+   public static void postInitApplication() {
+      if (applicationInited) {
+         return;
+      }
 
-        applicationInited = true;
-        convertConfig();
+      applicationInited = true;
+      convertConfig();
 
-        try {
-            LocaleController.getInstance();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+      try {
+         LocaleController.getInstance();
+      } catch (Exception e) {
+         e.printStackTrace();
+      }
 
-        try {
-            final IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_ON);
-            filter.addAction(Intent.ACTION_SCREEN_OFF);
-            final BroadcastReceiver mReceiver = new ScreenReceiver();
-            applicationContext.registerReceiver(mReceiver, filter);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+      try {
+         final IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_ON);
+         filter.addAction(Intent.ACTION_SCREEN_OFF);
+         final BroadcastReceiver mReceiver = new ScreenReceiver();
+         applicationContext.registerReceiver(mReceiver, filter);
+      } catch (Exception e) {
+         e.printStackTrace();
+      }
 
-        try {
-            PowerManager pm = (PowerManager)ApplicationLoader.applicationContext.getSystemService(Context.POWER_SERVICE);
-            isScreenOn = pm.isScreenOn();
-            FileLog.e("screen state = " + isScreenOn);
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
+      try {
+         PowerManager pm = (PowerManager) ApplicationLoader.applicationContext.getSystemService(Context.POWER_SERVICE);
+         isScreenOn = pm.isScreenOn();
+         FileLog.e("screen state = " + isScreenOn);
+      } catch (Exception e) {
+         FileLog.e(e);
+      }
 
-        UserConfig.loadConfig();
-        String deviceModel;
-        String langCode;
-        String appVersion;
-        String systemVersion;
-        String configPath = getFilesDirFixed().toString();
+      UserConfig.loadConfig();
+      String deviceModel;
+      String langCode;
+      String appVersion;
+      String systemVersion;
+      String configPath = getFilesDirFixed().toString();
 
-        try {
-            langCode = LocaleController.getLocaleStringIso639();
-            deviceModel = Build.MANUFACTURER + Build.MODEL;
-            PackageInfo pInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
-            appVersion = pInfo.versionName + " (" + pInfo.versionCode + ")";
-            systemVersion = "SDK " + Build.VERSION.SDK_INT;
-        } catch (Exception e) {
-            langCode = "en";
-            deviceModel = "Android unknown";
-            appVersion = "App version unknown";
-            systemVersion = "SDK " + Build.VERSION.SDK_INT;
-        }
-        if (langCode.trim().length() == 0) {
-            langCode = "en";
-        }
-        if (deviceModel.trim().length() == 0) {
-            deviceModel = "Android unknown";
-        }
-        if (appVersion.trim().length() == 0) {
-            appVersion = "App version unknown";
-        }
-        if (systemVersion.trim().length() == 0) {
-            systemVersion = "SDK Unknown";
-        }
+      try {
+         langCode = LocaleController.getLocaleStringIso639();
+         deviceModel = Build.MANUFACTURER + Build.MODEL;
+         PackageInfo pInfo = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
+         appVersion = pInfo.versionName + " (" + pInfo.versionCode + ")";
+         systemVersion = "SDK " + Build.VERSION.SDK_INT;
+      } catch (Exception e) {
+         langCode = "en";
+         deviceModel = "Android unknown";
+         appVersion = "App version unknown";
+         systemVersion = "SDK " + Build.VERSION.SDK_INT;
+      }
+      if (langCode.trim().length() == 0) {
+         langCode = "en";
+      }
+      if (deviceModel.trim().length() == 0) {
+         deviceModel = "Android unknown";
+      }
+      if (appVersion.trim().length() == 0) {
+         appVersion = "App version unknown";
+      }
+      if (systemVersion.trim().length() == 0) {
+         systemVersion = "SDK Unknown";
+      }
 
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("Notifications", Activity.MODE_PRIVATE);
-        boolean enablePushConnection = preferences.getBoolean("pushConnection", true);
+      SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("Notifications", Activity.MODE_PRIVATE);
+      boolean enablePushConnection = preferences.getBoolean("pushConnection", true);
 
-        MessagesController.getInstance();
-        ConnectionsManager.getInstance().init(BuildVars.BUILD_VERSION, TLRPC.LAYER, BuildVars.APP_ID, deviceModel, systemVersion, appVersion, langCode, configPath, FileLog.getNetworkLogPath(), UserConfig.getClientUserId(), enablePushConnection);
-        if (UserConfig.getCurrentUser() != null) {
-            MessagesController.getInstance().putUser(UserConfig.getCurrentUser(), true);
-            ConnectionsManager.getInstance().applyCountryPortNumber(UserConfig.getCurrentUser().phone);
-            MessagesController.getInstance().getBlockedUsers(true);
-            SendMessagesHelper.getInstance().checkUnsentMessages();
-        }
+      MessagesController.getInstance();
+      ConnectionsManager.getInstance().init(BuildVars.BUILD_VERSION, TLRPC.LAYER, BuildVars.APP_ID, deviceModel, systemVersion, appVersion, langCode, configPath, FileLog.getNetworkLogPath(), UserConfig.getClientUserId(), enablePushConnection);
+      if (UserConfig.getCurrentUser() != null) {
+         MessagesController.getInstance().putUser(UserConfig.getCurrentUser(), true);
+         ConnectionsManager.getInstance().applyCountryPortNumber(UserConfig.getCurrentUser().phone);
+         MessagesController.getInstance().getBlockedUsers(true);
+         SendMessagesHelper.getInstance().checkUnsentMessages();
+      }
 
-        ApplicationLoader app = (ApplicationLoader)ApplicationLoader.applicationContext;
-        app.initPlayServices();
-        FileLog.e("app initied");
+      ApplicationLoader app = (ApplicationLoader) ApplicationLoader.applicationContext;
+      app.initPlayServices();
+      FileLog.e("app initied");
 
-        ContactsController.getInstance().checkAppAccount();
-        MediaController.getInstance();
-    }
+      ContactsController.getInstance().checkAppAccount();
+      MediaController.getInstance();
+   }
 
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        gtfw = this;
+   @Override
+   public void onCreate() {
+      super.onCreate();
 
+      gtfw = this;
 
-        if (BuildConfig.DEBUG) {
-            Gtfw.getInstance().setDebug(true);
-        } else {
-            Gtfw.getInstance().setDebug(false);
-        }
+      if (BuildConfig.DEBUG) {
+         Gtfw.getInstance().setDebug(true);
+      } else {
+         Gtfw.getInstance().setDebug(false);
+      }
 
-        Fabric.with(this, new Crashlytics());
+      Fabric.with(this, new Crashlytics());
 
-        this.init();
+      this.init();
 
-        //Config.getInstance(this).setLoginClass(LoginActivity.class);
-        Config.getInstance(getApplicationContext()).setConfig("RESULT_KEY", "gtfwResult");
-        Config.getInstance(getApplicationContext()).setConfig("SESSION_COOKIE", "sf");
-        Config.getInstance(getApplicationContext()).setConfig("NEW_HASH", false);
+      //Config.getInstance(this).setLoginClass(LoginActivity.class);
+      Config.getInstance(getApplicationContext()).setConfig("RESULT_KEY", "gtfwResult");
+      Config.getInstance(getApplicationContext()).setConfig("SESSION_COOKIE", "sf");
+      Config.getInstance(getApplicationContext()).setConfig("NEW_HASH", false);
 
-        applicationContext = getApplicationContext();
-        NativeLoader.initNativeLibs(ApplicationLoader.applicationContext);
-        ConnectionsManager.native_setJava(Build.VERSION.SDK_INT == 14 || Build.VERSION.SDK_INT == 15);
-        new ForegroundDetector(this);
+      applicationContext = getApplicationContext();
+      NativeLoader.initNativeLibs(ApplicationLoader.applicationContext);
+      ConnectionsManager.native_setJava(Build.VERSION.SDK_INT == 14 || Build.VERSION.SDK_INT == 15);
+      new ForegroundDetector(this);
 
-        applicationHandler = new Handler(applicationContext.getMainLooper());
+      applicationHandler = new Handler(applicationContext.getMainLooper());
 
-        startPushService();
-    }
+      startPushService();
+   }
 
     /*public static void sendRegIdToBackend(final String token) {
         Utilities.stageQueue.postRunnable(new Runnable() {
@@ -247,58 +264,58 @@ public class ApplicationLoader extends Gtfw {
         });
     }*/
 
-    public static void startPushService() {
-        SharedPreferences preferences = applicationContext.getSharedPreferences("Notifications", MODE_PRIVATE);
+   public static void startPushService() {
+      SharedPreferences preferences = applicationContext.getSharedPreferences("Notifications", MODE_PRIVATE);
 
-        if (preferences.getBoolean("pushService", true)) {
-            applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
-        } else {
-            stopPushService();
-        }
-    }
+      if (preferences.getBoolean("pushService", true)) {
+         applicationContext.startService(new Intent(applicationContext, NotificationsService.class));
+      } else {
+         stopPushService();
+      }
+   }
 
-    public static void stopPushService() {
-        applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));
+   public static void stopPushService() {
+      applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));
 
-        PendingIntent pintent = PendingIntent.getService(applicationContext, 0, new Intent(applicationContext, NotificationsService.class), 0);
-        AlarmManager alarm = (AlarmManager)applicationContext.getSystemService(Context.ALARM_SERVICE);
-        alarm.cancel(pintent);
-    }
+      PendingIntent pintent = PendingIntent.getService(applicationContext, 0, new Intent(applicationContext, NotificationsService.class), 0);
+      AlarmManager alarm = (AlarmManager) applicationContext.getSystemService(Context.ALARM_SERVICE);
+      alarm.cancel(pintent);
+   }
 
-    @Override
-    public void onConfigurationChanged(Configuration newConfig) {
-        super.onConfigurationChanged(newConfig);
-        try {
-            LocaleController.getInstance().onDeviceConfigurationChange(newConfig);
-            AndroidUtilities.checkDisplaySize(applicationContext, newConfig);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
+   @Override
+   public void onConfigurationChanged(Configuration newConfig) {
+      super.onConfigurationChanged(newConfig);
+      try {
+         LocaleController.getInstance().onDeviceConfigurationChange(newConfig);
+         AndroidUtilities.checkDisplaySize(applicationContext, newConfig);
+      } catch (Exception e) {
+         e.printStackTrace();
+      }
+   }
 
-    private void initPlayServices() {
-        AndroidUtilities.runOnUIThread(new Runnable() {
-            @Override
-            public void run() {
-                if (checkPlayServices()) {
-                    if (UserConfig.pushString != null && UserConfig.pushString.length() != 0) {
-                        FileLog.d("GCM regId = " + UserConfig.pushString);
-                    } else {
-                        FileLog.d("GCM Registration not found.");
-                    }
+   private void initPlayServices() {
+      AndroidUtilities.runOnUIThread(new Runnable() {
+         @Override
+         public void run() {
+            if (checkPlayServices()) {
+               if (UserConfig.pushString != null && UserConfig.pushString.length() != 0) {
+                  FileLog.d("GCM regId = " + UserConfig.pushString);
+               } else {
+                  FileLog.d("GCM Registration not found.");
+               }
 
-                    //if (UserConfig.pushString == null || UserConfig.pushString.length() == 0) {
-                    Intent intent = new Intent(applicationContext, GcmRegistrationIntentService.class);
-                    startService(intent);
-                    //} else {
-                    //    FileLog.d("GCM regId = " + UserConfig.pushString);
-                    //}
-                } else {
-                    FileLog.d("No valid Google Play Services APK found.");
-                }
+               //if (UserConfig.pushString == null || UserConfig.pushString.length() == 0) {
+               Intent intent = new Intent(applicationContext, GcmRegistrationIntentService.class);
+               startService(intent);
+               //} else {
+               //    FileLog.d("GCM regId = " + UserConfig.pushString);
+               //}
+            } else {
+               FileLog.d("No valid Google Play Services APK found.");
             }
-        }, 1000);
-    }
+         }
+      }, 1000);
+   }
 
     /*private void initPlayServices() {
         AndroidUtilities.runOnUIThread(new Runnable() {
@@ -327,14 +344,14 @@ public class ApplicationLoader extends Gtfw {
         }, 2000);
     }*/
 
-    private boolean checkPlayServices() {
-        try {
-            int resultCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(this);
-            return resultCode == ConnectionResult.SUCCESS;
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-        return true;
+   private boolean checkPlayServices() {
+      try {
+         int resultCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(this);
+         return resultCode == ConnectionResult.SUCCESS;
+      } catch (Exception e) {
+         FileLog.e(e);
+      }
+      return true;
 
         /*if (resultCode != ConnectionResult.SUCCESS) {
             if (GooglePlayServicesUtil.isUserRecoverableError(resultCode)) {
@@ -345,5 +362,8 @@ public class ApplicationLoader extends Gtfw {
             return false;
         }
         return true;*/
-    }
+   }
+
+
+
 }
